@@ -54,8 +54,9 @@ app.get('/api/v1/health', (req, res) => {
   });
 });
 
+app.use('/api/v1/auth', require('./routes/authRoutes'));
+
 // TODO: در مراحل بعدی روت‌های واقعی اینجا اضافه می‌شوند، مثال:
-// app.use('/api/v1/auth', require('./routes/authRoutes'));
 // app.use('/api/v1/businesses', require('./routes/businessRoutes'));
 // app.use('/api/v1/bags', require('./routes/bagRoutes'));
 // app.use('/api/v1/orders', require('./routes/orderRoutes'));
@@ -70,10 +71,42 @@ app.all('*', (req, res) => {
 
 // ---------- 3) GLOBAL ERROR HANDLER ----------
 app.use((err, req, res, next) => {
-  const statusCode = err.statusCode || 500;
+  let statusCode = err.statusCode || 500;
+  let message = err.message || 'خطای داخلی سرور';
+
+  // خطای Mongoose duplicate key (مثلاً شماره موبایل تکراری که مستقیم از ایندکس یکتا رد شده)
+  if (err.code === 11000) {
+    statusCode = 409;
+    message = 'این مقدار قبلاً در سیستم ثبت شده است (تکراری است)';
+  }
+
+  // خطای Mongoose validation (مثلاً فیلد الزامی خالی مانده یا فرمت اشتباه است)
+  if (err.name === 'ValidationError') {
+    statusCode = 400;
+    message = Object.values(err.errors)
+      .map((e) => e.message)
+      .join(' | ');
+  }
+
+  // خطای Mongoose CastError (مثلاً ObjectId نامعتبر در پارامتر آدرس)
+  if (err.name === 'CastError') {
+    statusCode = 400;
+    message = `مقدار نامعتبر برای ${err.path}: ${err.value}`;
+  }
+
+  // خطاهای JWT
+  if (err.name === 'JsonWebTokenError') {
+    statusCode = 401;
+    message = 'توکن نامعتبر است، لطفاً دوباره وارد شوید';
+  }
+  if (err.name === 'TokenExpiredError') {
+    statusCode = 401;
+    message = 'نشست شما منقضی شده است، لطفاً دوباره وارد شوید';
+  }
+
   res.status(statusCode).json({
-    status: err.status || 'error',
-    message: err.message || 'خطای داخلی سرور',
+    status: statusCode.toString().startsWith('4') ? 'fail' : 'error',
+    message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
