@@ -9,60 +9,14 @@
  * a mobile app) that may prefer to manage the token themselves.
  */
 
-const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/userModel');
 const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
+const { createSendToken } = require('../utils/token');
 
-// ---------- Helpers ----------
-
-/**
- * Signs a new JWT containing the user's id.
- * @param {string} id - MongoDB ObjectId of the user
- */
-const signToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
-  });
-};
-
-/**
- * Shared helper used by every "successful login" flow (signup, login,
- * and later OTP login in Step 2) to:
- *   1. sign a JWT
- *   2. set it as a secure httpOnly cookie
- *   3. strip the password hash from the response
- *   4. send the final JSON response
- *
- * @param {import('mongoose').Document} user - The authenticated user document
- * @param {number} statusCode - HTTP status to respond with (200 or 201)
- * @param {import('express').Response} res
- */
-const createSendToken = (user, statusCode, res) => {
-  const token = signToken(user._id);
-
-  // JWT_EXPIRES_IN is like "7d" — parse the leading number as days for the cookie
-  const expiresInDays = parseInt(process.env.JWT_EXPIRES_IN, 10) || 7;
-
-  res.cookie('jwt', token, {
-    expires: new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000),
-    httpOnly: true, // client-side JS cannot read this cookie (XSS protection)
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-    sameSite: 'strict',
-  });
-
-  // Never leak the password hash back to the client
-  user.passwordHash = undefined;
-
-  res.status(statusCode).json({
-    status: 'success',
-    token,
-    data: {
-      user,
-    },
-  });
-};
+// signToken/createSendToken now live in utils/token.js — shared with
+// otpController.js so both login methods issue tokens the exact same way
 
 // ---------- Controllers ----------
 

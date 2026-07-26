@@ -68,10 +68,18 @@ http://localhost:3000/api/v1/health
 ```
 If you see `{"status":"success", ...}`, the server and database are connected successfully.
 
+## 🔐 Authentication
+Two ways to log in are supported:
+
+1. **Password-based** (`/api/v1/auth/signup`, `/login`, `/logout`) — classic phone + password flow.
+2. **OTP-based / passwordless** (`/api/v1/auth/request-otp`, `/verify-otp`) — a 5-digit code is sent by SMS (currently mocked, see `utils/smsService.js`) and expires after 2 minutes. Verifying the correct code logs the user in, automatically creating an account on first use. Requests are rate-limited to 3 per phone number per 10 minutes to control SMS costs.
+
+Both methods issue the same JWT, delivered as a secure `httpOnly` cookie.
+
 ## 📌 Project Roadmap
 - [x] Step 0 — Project skeleton setup and health-check endpoint
-- [ ] Step 1 — User model and basic JWT authentication
-- [ ] Step 2 — OTP login
+- [x] Step 1 — User model and basic JWT authentication
+- [x] Step 2 — OTP login
 - [ ] Step 3 — Business model and approval flow
 - [ ] Step 4 — Admin panel
 - [ ] Step 5 — SurpriseBag model
@@ -92,6 +100,7 @@ If you see `{"status":"success", ...}`, the server and database are connected su
 - The `.env` file must **never** be committed (already excluded via `.gitignore`)
 - Always generate a random, long `JWT_SECRET` for production
 - Restrict MongoDB Atlas Network Access for production (not `0.0.0.0/0`)
+- `POST /api/v1/auth/request-otp` returns a `devOnlyCode` field when `NODE_ENV !== 'production'`, purely so you can test the OTP flow without a real SMS provider. **This must be removed or NODE_ENV must be set to `production` before any real deployment**, or anyone could log in as anyone else without ever touching their phone.
 
 ## 📄 License
 This project is developed for educational/learning purposes.
