@@ -1,12 +1,34 @@
+/**
+ * authMiddleware.js
+ * -----------------
+ * Two reusable Express middlewares for authentication and authorization:
+ *
+ *   - protect:    verifies the requester is logged in (valid JWT)
+ *   - restrictTo: verifies the requester's role is allowed for this route
+ *
+ * Usage example (in a routes file):
+ *   router.post('/', protect, restrictTo('admin'), someController);
+ */
+
 const jwt = require('jsonwebtoken');
 const { promisify } = require('util');
 const User = require('../models/userModel');
 const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
 
-// میدل‌ور protect: بررسی می‌کند کاربر لاگین کرده و JWT معتبر دارد
+/**
+ * protect
+ * -------
+ * Reads the JWT from the httpOnly cookie set at login, verifies it,
+ * loads the corresponding user from the database, and attaches it to
+ * `req.user` so later middleware/controllers can use it.
+ *
+ * Responds with 401 if the token is missing/invalid, or if the user
+ * account no longer exists. Responds with 403 if the account has been
+ * restricted (see Step 11 — two-way trust/flagging system).
+ */
 exports.protect = catchAsync(async (req, res, next) => {
-  // ۱) خواندن توکن از کوکی httpOnly (چیزی که در login ست کردیم)
+  // 1) Read the token from the cookie (set in authController.createSendToken)
   let token;
   if (req.cookies && req.cookies.jwt) {
     token = req.cookies.jwt;
@@ -14,40 +36,47 @@ exports.protect = catchAsync(async (req, res, next) => {
 
   if (!token) {
     return next(
-      new AppError('برای دسترسی به این بخش باید وارد حساب کاربری خود شوید', 401)
+      new AppError('You are not logged in. Please log in to access this resource', 401)
     );
   }
 
-  // ۲) اعتبارسنجی توکن (امضا و تاریخ انقضا)
+  // 2) Verify the token's signature and expiration
   const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
 
-  // ۳) بررسی اینکه کاربر مرتبط با این توکن هنوز وجود دارد
+  // 3) Make sure the user this token belongs to still exists
   const currentUser = await User.findById(decoded.id);
   if (!currentUser) {
     return next(
-      new AppError('کاربری که به این توکن تعلق دارد دیگر وجود ندارد', 401)
+      new AppError('The user belonging to this token no longer exists', 401)
     );
   }
 
-  // ۴) بررسی محدودیت حساب (برای مرحله ۱۱ - گزارش دوطرفه no-show)
+  // 4) Block restricted accounts (repeated no-show flags, etc.)
   if (currentUser.isRestricted) {
     return next(
-      new AppError('حساب کاربری شما به‌دلیل تخلفات مکرر محدود شده است', 403)
+      new AppError('Your account has been restricted due to repeated violations', 403)
     );
   }
 
-  // همه چیز اوکی است — کاربر را روی req قرار بده تا در controllerهای بعدی قابل استفاده باشد
+  // All good — make the user available to the next handler
   req.user = currentUser;
   next();
 });
 
-// میدل‌ور restrictTo: محدود کردن دسترسی بر اساس نقش کاربر
-// استفاده: router.post('/', protect, restrictTo('admin'), someController)
+/**
+ * restrictTo
+ * ----------
+ * Factory function that returns a middleware limiting access to the
+ * given list of roles. Must be used AFTER `protect`, since it relies
+ * on `req.user` being already set.
+ *
+ * @param  {...string} roles - Allowed roles, e.g. restrictTo('admin', 'business')
+ */
 exports.restrictTo = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
       return next(
-        new AppError('شما مجوز انجام این عملیات را ندارید', 403)
+        new AppError('You do not have permission to perform this action', 403)
       );
     }
     next();
