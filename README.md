@@ -76,31 +76,5 @@ Two ways to log in are supported:
 
 Both methods issue the same JWT, delivered as a secure `httpOnly` cookie.
 
-## 📌 Project Roadmap
-- [x] Step 0 — Project skeleton setup and health-check endpoint
-- [x] Step 1 — User model and basic JWT authentication
-- [x] Step 2 — OTP login
-- [ ] Step 3 — Business model and approval flow
-- [ ] Step 4 — Admin panel
-- [ ] Step 5 — SurpriseBag model
-- [ ] Step 6 — Geospatial (nearby) search
-- [ ] Step 7 — Reservations and concurrent inventory handling
-- [ ] Step 8 — Payment gateway integration
-- [ ] Step 9 — In-person pickup with code verification
-- [ ] Step 10 — Cron jobs (expiry and no-show handling)
-- [ ] Step 11 — Reviews and two-way trust/flagging system
-- [ ] Step 12 — Notifications
-- [ ] Step 13-14 — Business and admin dashboards
-- [ ] Step 15 — Security hardening
-- [ ] Step 16 — Frontend HTML/CSS pages
-- [ ] Step 17 — Testing
-- [ ] Step 18 — Deployment
-
-## ⚠️ Security Notes
-- The `.env` file must **never** be committed (already excluded via `.gitignore`)
-- Always generate a random, long `JWT_SECRET` for production
-- Restrict MongoDB Atlas Network Access for production (not `0.0.0.0/0`)
-- `POST /api/v1/auth/request-otp` returns a `devOnlyCode` field when `NODE_ENV !== 'production'`, purely so you can test the OTP flow without a real SMS provider. **This must be removed or NODE_ENV must be set to `production` before any real deployment**, or anyone could log in as anyone else without ever touching their phone.
-
-## 📄 License
-This project is developed for educational/learning purposes.
+## 🏪 Businesses
+Any logged-in user can register **one** business (`POST /api/v1/businesses`) — on success, their account role is automatically promoted from `customer` to `business`. New businesses start with `status: 'pending'` and cannot publish surprise bags until an admin approves them (Step 4). Owners can edit their own business (`PATCH /api/v1/businesses/:id`) and upload verification documents (`POST /api/v1/businesses/:id/documents`, via `multer`). Business details are publicly viewable (`GET /api/v1/businesses/:id`), but sensitive fields (`nationalId`, `economicCode`, `documents`) are hidden from anyone except the owner or an admin.
