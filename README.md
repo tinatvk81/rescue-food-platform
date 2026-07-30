@@ -78,3 +78,13 @@ Both methods issue the same JWT, delivered as a secure `httpOnly` cookie.
 
 ## 🏪 Businesses
 Any logged-in user can register **one** business (`POST /api/v1/businesses`) — on success, their account role is automatically promoted from `customer` to `business`. New businesses start with `status: 'pending'` and cannot publish surprise bags until an admin approves them (Step 4). Owners can edit their own business (`PATCH /api/v1/businesses/:id`) and upload verification documents (`POST /api/v1/businesses/:id/documents`, via `multer`). Business details are publicly viewable (`GET /api/v1/businesses/:id`), but sensitive fields (`nationalId`, `economicCode`, `documents`) are hidden from anyone except the owner or an admin.
+
+## 🛡️ Admin
+All `/api/v1/admin/*` routes require `role: 'admin'`. Since there's no signup flow for admins (intentionally — admin accounts should never be self-service), you must promote a user manually (see "Creating the first admin" below). Admins can list businesses by status, and approve/reject/suspend them. Every status change automatically creates a `Notification` document for the business owner (in-app only for now — real SMS/push delivery arrives in Step 12).
+
+### Creating the first admin
+Connect to your MongoDB instance and run:
+```js
+db.users.updateOne({ phone: "09053213280" }, { $set: { role: "admin" } })
+```
+(Using `mongosh`: `sudo docker exec -it rescue-mongo mongosh rescue-food-platform --eval 'db.users.updateOne({phone:"09053213280"},{$set:{role:"admin"}})'`)

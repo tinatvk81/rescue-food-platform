@@ -64,6 +64,45 @@ exports.protect = catchAsync(async (req, res, next) => {
 });
 
 /**
+ * optionalAuth
+ * ------------
+ * Like `protect`, but never blocks the request. If a valid JWT cookie
+ * is present, `req.user` is set (so the route can show extra detail to
+ * the owner/admin). If the cookie is missing, invalid, or expired,
+ * the request simply continues with `req.user` left undefined —
+ * treating the requester as an anonymous visitor instead of rejecting
+ * them.
+ *
+ * Use this (instead of `protect`) on routes that should be publicly
+ * viewable by anyone, but that want to *optionally* recognize a
+ * logged-in owner/admin to show them extra information — e.g.
+ * GET /api/v1/businesses/:id (see businessController.getBusiness).
+ */
+exports.optionalAuth = catchAsync(async (req, res, next) => {
+  let token;
+  if (req.cookies && req.cookies.jwt && req.cookies.jwt !== 'loggedout') {
+    token = req.cookies.jwt;
+  }
+
+  if (!token) {
+    return next(); // no cookie at all — proceed as anonymous
+  }
+
+  try {
+    const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
+    const currentUser = await User.findById(decoded.id);
+    if (currentUser && !currentUser.isRestricted) {
+      req.user = currentUser;
+    }
+  } catch (err) {
+    // Invalid/expired token — silently ignore and proceed as anonymous,
+    // rather than blocking the request the way `protect` would
+  }
+
+  next();
+});
+
+/**
  * restrictTo
  * ----------
  * Factory function that returns a middleware limiting access to the

@@ -7,15 +7,16 @@
 
 const express = require('express');
 const businessController = require('../controllers/businessController');
-const { protect } = require('../middlewares/authMiddleware');
+const { protect, optionalAuth } = require('../middlewares/authMiddleware');
 const upload = require('../middlewares/uploadMiddleware');
 
 const router = express.Router();
 
-// Publicly viewable — no `protect`, so anyone can look up a business by id.
-// (req.user will simply be undefined here for anonymous requests; the
-// controller already handles that.)
-router.get('/:id', businessController.getBusiness);
+// Publicly viewable by anyone, but uses optionalAuth (not protect) so that
+// IF a valid login cookie is present, req.user gets set and the owner/admin
+// sees extra detail (see businessController.sanitizeForPublicView) — an
+// anonymous visitor is never blocked from viewing.
+router.get('/:id', optionalAuth, businessController.getBusiness);
 
 // Everything below requires being logged in
 router.post('/', protect, businessController.createBusiness);
