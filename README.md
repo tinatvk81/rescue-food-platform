@@ -85,6 +85,20 @@ All `/api/v1/admin/*` routes require `role: 'admin'`. Since there's no signup fl
 ### Creating the first admin
 Connect to your MongoDB instance and run:
 ```js
-db.users.updateOne({ phone: "09053213280" }, { $set: { role: "admin" } })
+db.users.updateOne({ phone: "09123456789" }, { $set: { role: "admin" } })
 ```
-(Using `mongosh`: `sudo docker exec -it rescue-mongo mongosh rescue-food-platform --eval 'db.users.updateOne({phone:"09053213280"},{$set:{role:"admin"}})'`)
+(Using `mongosh`: `sudo docker exec -it rescue-mongo mongosh rescue-food-platform --eval 'db.users.updateOne({phone:"09123456789"},{$set:{role:"admin"}})'`)
+
+## 🎁 Surprise Bags
+An **approved** business (see the Admin Panel section above) can publish surprise bags — `POST /api/v1/bags` reuses the `requireApprovedBusiness()` middleware built (unused) in Step 3, so unapproved/suspended businesses are blocked automatically. A bag can only be edited (`PATCH /api/v1/bags/:id`) or cancelled (`DELETE /api/v1/bags/:id`, a soft-delete that sets `status: 'cancelled'`) **before it has any reservations** — this protects customers from a business changing the price or pickup window after someone has already paid. Bags are publicly viewable (`GET /api/v1/bags/:id`, no login required).
+
+## 📍 Nearby Search
+`GET /api/v1/bags/nearby?lat=..&lng=..&radius=..&category=..&maxPrice=..&sort=..` finds active, available, not-yet-expired surprise bags near a point using a MongoDB aggregation pipeline (`$geoNear` on `Business.location`, then `$lookup` into `SurpriseBag`). Only bags belonging to **approved** businesses are ever returned.
+
+- `lat`, `lng` — required
+- `radius` — optional, in **meters** (default `5000`)
+- `category` — optional filter
+- `maxPrice` — optional, filters by `discountedPrice`
+- `sort` — `distance` (default), `price`, or `expiring-soon`
+
+Each result includes `distanceInMeters` and `timeRemainingSeconds` (time left until `pickupWindowEnd`).
