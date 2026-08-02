@@ -104,4 +104,14 @@ An **approved** business (see the Admin Panel section above) can publish surpris
 Each result includes `distanceInMeters` and `timeRemainingSeconds` (time left until `pickupWindowEnd`).
 
 ## 🧾 Orders & Reservations
-`POST /api/v1/orders` (body: `{ surpriseBag, quantity }`) reserves a quantity of a surprise bag using an atomic MongoDB `findOneAndUpdate` — the condition `quantityReserved + quantity <= quantityAvailable` is checked and the increment applied as a single indivisible database operation, which is what prevents overselling when multiple customers try to reserve the same bag at the same moment. A business owner cannot reserve a bag from their own business. Each order gets a unique 6-character `pickupCode` (used at pickup time in Step 9). `paymentStatus` starts as `pending` — Step 8 adds the actual payment gateway integration that marks it `paid`. If order creation fails after inventory was already reserved, the reservation is automatically rolled back.
+`POST /api/v1/orders` (body: `{ surpriseBag, quantity }`) reserves a quantity of a surprise bag using an atomic MongoDB `findOneAndUpdate` — the condition `quantityReserved + quantity <= quantityAvailable` is checked and the increment applied as a single indivisible database operation, which is what prevents overselling when multiple customers try to reserve the same bag at the same moment. A business owner cannot reserve a bag from their own business. Each order gets a unique 6-character `pickupCode` (used at pickup time in Step 9). `paymentStatus` starts as `pending`. If order creation fails after inventory was already reserved, the reservation is automatically rolled back.
+
+## 💳 Payments & Cancellations
+`POST /api/v1/orders/:id/pay` starts a Zarinpal payment (a widely-used Iranian payment gateway) and returns a `paymentUrl` to redirect the customer to. Zarinpal redirects back to `GET /api/v1/orders/:id/verify-payment`, which confirms the transaction and marks the order `paid`. **Runs against Zarinpal's public sandbox by default** (`ZARINPAL_SANDBOX=true`, no real merchant account needed to test the full flow — see `.env.example`).
+
+Cancellation policy (`utils/refundPolicy.js`):
+- `PATCH /api/v1/orders/:id/business-cancel` — a business can cancel any of its own orders, any time, always fully refunded.
+- `PATCH /api/v1/orders/:id/cancel` — a customer can cancel only if it's **at least 30 minutes before the pickup window starts**; if allowed, fully refunded.
+- No-show (customer never picks up) is **not** handled here — that's an automatic, unrefunded outcome applied by the Step 10 cron job.
+
+⚠️ Zarinpal does not expose a simple public refund API for standard merchant accounts — a `refunded` paymentStatus here records that a refund is *owed*, but actually returning money to the customer's card currently requires the Zarinpal merchant dashboard.

@@ -57,6 +57,13 @@ const orderSchema = new mongoose.Schema({
   paymentRef: {
     type: String,
   },
+  // Zarinpal's "Authority" token for this specific payment attempt —
+  // stored so the verify-payment callback (which Zarinpal calls directly,
+  // with no cookie/session of ours) can look up which order it belongs
+  // to and confirm the callback wasn't forged.
+  paymentAuthority: {
+    type: String,
+  },
 
   // Shown to the customer, entered by the business at pickup time
   // (Step 9) to confirm the handoff. Unique so two orders never

@@ -33,6 +33,25 @@ const Order = require('../models/orderModel');
 const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
 const generatePickupCode = require('../utils/generatePickupCode');
+const paymentService = require('../utils/paymentService');
+const { evaluateCancellation } = require('../utils/refundPolicy');
+
+/**
+ * Releases previously-reserved inventory back to a bag (used by both
+ * cancellation flows below), and flips a soldOut bag back to active if
+ * it still has time left on its pickup window — mirroring the rollback
+ * logic already used in createOrder.
+ */
+const releaseReservedQuantity = async (bagId, quantity) => {
+  const bag = await SurpriseBag.findById(bagId);
+  if (!bag) return; // bag was somehow deleted — nothing to release
+
+  bag.quantityReserved = Math.max(0, bag.quantityReserved - quantity);
+  if (bag.status === 'soldOut' && bag.pickupWindowEnd > new Date()) {
+    bag.status = 'active';
+  }
+  await bag.save();
+};
 
 const MAX_PICKUP_CODE_RETRIES = 5;
 
@@ -163,6 +182,201 @@ exports.createOrder = catchAsync(async (req, res, next) => {
 
   res.status(201).json({
     status: 'success',
+    data: { order },
+  });
+});
+
+/**
+ * POST /api/v1/orders/:id/pay
+ * Only the customer who made the order can start payment for it.
+ *
+ * NOTE ON CURRENCY: Zarinpal's API expects an integer amount. Historically
+ * this meant Rials; confirm the unit your specific merchant account expects
+ * before going live, and adjust the amount sent here accordingly (e.g.
+ * dividing by 10 if your totalPrice is stored in Toman but Zarinpal expects
+ * Rials, or vice versa) — this codebase sends `order.totalPrice` as-is.
+ */
+exports.payOrder = catchAsync(async (req, res, next) => {
+  const order = await Order.findById(req.params.id);
+
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+  if (order.customer.toString() !== req.user._id.toString()) {
+    return next(new AppError('You do not have permission to pay for this order', 403));
+  }
+  if (order.status !== 'reserved') {
+    return next(new AppError(`This order's status (${order.status}) can no longer be paid for`, 400));
+  }
+  if (order.paymentStatus === 'paid') {
+    return next(new AppError('This order has already been paid', 400));
+  }
+
+  // process.env.APP_BASE_URL must be the publicly reachable base URL of
+  // THIS API (e.g. https://api.yourapp.com) — Zarinpal redirects the
+  // customer's browser here after they pay.
+  const callbackUrl = `${process.env.APP_BASE_URL}/api/v1/orders/${order._id}/verify-payment`;
+
+  const { authority, paymentUrl } = await paymentService.requestPayment({
+    amount: order.totalPrice,
+    description: `Rescue Food Platform order ${order._id}`,
+    callbackUrl,
+    metadata: { order_id: order._id.toString() },
+  });
+
+  order.paymentAuthority = authority;
+  await order.save();
+
+  res.status(200).json({
+    status: 'success',
+    data: { paymentUrl },
+  });
+});
+
+/**
+ * GET /api/v1/orders/:id/verify-payment
+ * Zarinpal redirects the customer's browser here after payment — this
+ * route is intentionally NOT behind `protect`: Zarinpal's redirect is a
+ * plain browser navigation with no cookie of ours attached, and in
+ * production this would typically be hit from the customer's own
+ * browser/device, not a background server call. Instead, we authorize
+ * the request by requiring the `Authority` query param to match the
+ * one we generated and stored in payOrder — an attacker would have to
+ * guess that (effectively random) token to forge a callback.
+ */
+exports.verifyPaymentCallback = catchAsync(async (req, res, next) => {
+  const { Authority, Status } = req.query;
+
+  const order = await Order.findById(req.params.id);
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+  if (!Authority || order.paymentAuthority !== Authority) {
+    return next(new AppError('Payment authority does not match this order', 400));
+  }
+
+  if (Status !== 'OK') {
+    order.paymentStatus = 'failed';
+    await order.save();
+    return res.status(200).json({
+      status: 'success',
+      message: 'Payment was cancelled or failed',
+      data: { order },
+    });
+  }
+
+  const result = await paymentService.verifyPayment({
+    amount: order.totalPrice,
+    authority: Authority,
+  });
+
+  if (!result.verified) {
+    order.paymentStatus = 'failed';
+    await order.save();
+    return next(new AppError(result.error || 'Payment verification failed', 400));
+  }
+
+  order.paymentStatus = 'paid';
+  order.paymentRef = result.refId;
+  await order.save();
+
+  res.status(200).json({
+    status: 'success',
+    message: 'Payment verified successfully',
+    data: { order },
+  });
+});
+
+/**
+ * PATCH /api/v1/orders/:id/cancel
+ * Customer-initiated cancellation — only allowed at least 30 minutes
+ * before the pickup window starts (see utils/refundPolicy.js).
+ */
+exports.cancelOrder = catchAsync(async (req, res, next) => {
+  const order = await Order.findById(req.params.id);
+
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+  if (order.customer.toString() !== req.user._id.toString()) {
+    return next(new AppError('You do not have permission to cancel this order', 403));
+  }
+  if (order.status !== 'reserved') {
+    return next(new AppError(`This order's status (${order.status}) can no longer be cancelled`, 400));
+  }
+
+  const bag = await SurpriseBag.findById(order.surpriseBag);
+  if (!bag) {
+    return next(new AppError('The surprise bag for this order could not be found', 404));
+  }
+
+  const decision = evaluateCancellation({
+    initiator: 'customer',
+    pickupWindowStart: bag.pickupWindowStart,
+  });
+
+  if (!decision.allowed) {
+    return next(new AppError(decision.reason, 400));
+  }
+
+  // NOTE: Zarinpal does not expose a simple public refund API for
+  // standard merchant accounts — actually reversing money to the
+  // customer's card typically has to be done manually via the
+  // Zarinpal merchant dashboard for now. We record the *intent* here
+  // (paymentStatus: 'refunded') so the business/admin knows a refund
+  // is owed, but this does NOT itself move any money.
+  // TODO: automate this if/when a suitable Zarinpal refund product is available.
+  if (order.paymentStatus === 'paid' && decision.shouldRefund) {
+    order.paymentStatus = 'refunded';
+  }
+
+  order.status = 'cancelled';
+  await order.save();
+  await releaseReservedQuantity(bag._id, order.quantity);
+
+  res.status(200).json({
+    status: 'success',
+    message: decision.reason,
+    data: { order },
+  });
+});
+
+/**
+ * PATCH /api/v1/orders/:id/business-cancel
+ * Business-initiated cancellation — always allowed, always refunded
+ * (see utils/refundPolicy.js). Only the business that owns the order
+ * may call this.
+ */
+exports.businessCancelOrder = catchAsync(async (req, res, next) => {
+  const order = await Order.findById(req.params.id);
+
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+
+  const business = await Business.findById(order.business);
+  if (!business || business.ownerUser.toString() !== req.user._id.toString()) {
+    return next(new AppError('You do not have permission to cancel this order', 403));
+  }
+  if (order.status !== 'reserved') {
+    return next(new AppError(`This order's status (${order.status}) can no longer be cancelled`, 400));
+  }
+
+  const decision = evaluateCancellation({ initiator: 'business', pickupWindowStart: new Date() });
+
+  // See the note in cancelOrder above — this marks the refund as owed,
+  // it does not itself move money via a Zarinpal API call.
+  if (order.paymentStatus === 'paid' && decision.shouldRefund) {
+    order.paymentStatus = 'refunded';
+  }
+
+  order.status = 'cancelled';
+  await order.save();
+  await releaseReservedQuantity(order.surpriseBag, order.quantity);
+
+  res.status(200).json({
+    status: 'success',
+    message: decision.reason,
     data: { order },
   });
 });
