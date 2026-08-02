@@ -102,3 +102,6 @@ An **approved** business (see the Admin Panel section above) can publish surpris
 - `sort` — `distance` (default), `price`, or `expiring-soon`
 
 Each result includes `distanceInMeters` and `timeRemainingSeconds` (time left until `pickupWindowEnd`).
+
+## 🧾 Orders & Reservations
+`POST /api/v1/orders` (body: `{ surpriseBag, quantity }`) reserves a quantity of a surprise bag using an atomic MongoDB `findOneAndUpdate` — the condition `quantityReserved + quantity <= quantityAvailable` is checked and the increment applied as a single indivisible database operation, which is what prevents overselling when multiple customers try to reserve the same bag at the same moment. A business owner cannot reserve a bag from their own business. Each order gets a unique 6-character `pickupCode` (used at pickup time in Step 9). `paymentStatus` starts as `pending` — Step 8 adds the actual payment gateway integration that marks it `paid`. If order creation fails after inventory was already reserved, the reservation is automatically rolled back.

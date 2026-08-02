@@ -77,9 +77,9 @@ app.use('/api/v1/auth', require('./routes/authRoutes'));
 app.use('/api/v1/businesses', require('./routes/businessRoutes'));
 app.use('/api/v1/admin', require('./routes/adminRoutes'));
 app.use('/api/v1/bags', require('./routes/bagRoutes'));
+app.use('/api/v1/orders', require('./routes/orderRoutes'));
 
-// TODO: mount future route modules here, e.g.:
-// app.use('/api/v1/orders', require('./routes/orderRoutes'));
+// TODO: mount future route modules here
 
 // Catch-all for any route that doesn't match one defined above
 app.all('*', (req, res) => {
