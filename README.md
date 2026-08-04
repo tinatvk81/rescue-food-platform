@@ -115,3 +115,6 @@ Cancellation policy (`utils/refundPolicy.js`):
 - No-show (customer never picks up) is **not** handled here — that's an automatic, unrefunded outcome applied by the Step 10 cron job.
 
 ⚠️ Zarinpal does not expose a simple public refund API for standard merchant accounts — a `refunded` paymentStatus here records that a refund is *owed*, but actually returning money to the customer's card currently requires the Zarinpal merchant dashboard.
+
+## 📦 In-Person Pickup
+`PATCH /api/v1/orders/:id/pickup` (business-only, body: `{ pickupCode }`) confirms the handoff at the counter. It requires `paymentStatus === 'paid'` and a matching `pickupCode` (compared case-insensitively). On success, the order becomes `pickedUp`, `pickedUpAt` is recorded, and the customer's personal impact stats (`totalMealsSaved`, `totalMoneySaved`, `estimatedCO2Saved`) are incremented, using a shared, reusable calculation in `utils/impactStats.js` (2.5kg CO2 saved per meal, a commonly-cited estimate).

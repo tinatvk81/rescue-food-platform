@@ -30,11 +30,13 @@ const mongoose = require('mongoose');
 const SurpriseBag = require('../models/surpriseBagModel');
 const Business = require('../models/businessModel');
 const Order = require('../models/orderModel');
+const User = require('../models/userModel');
 const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
 const generatePickupCode = require('../utils/generatePickupCode');
 const paymentService = require('../utils/paymentService');
 const { evaluateCancellation } = require('../utils/refundPolicy');
+const { calculateImpact } = require('../utils/impactStats');
 
 /**
  * Releases previously-reserved inventory back to a bag (used by both
@@ -181,6 +183,36 @@ exports.createOrder = catchAsync(async (req, res, next) => {
   }
 
   res.status(201).json({
+    status: 'success',
+    data: { order },
+  });
+});
+
+/**
+ * GET /api/v1/orders/:id
+ * Only the customer who placed the order, or the business it belongs
+ * to, may view it — an order contains another person's contact-adjacent
+ * data (implicitly, via populate) and payment info, so it's not public.
+ */
+exports.getOrder = catchAsync(async (req, res, next) => {
+  const order = await Order.findById(req.params.id).populate(
+    'surpriseBag',
+    'title pickupWindowStart pickupWindowEnd'
+  );
+
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+
+  const isCustomer = order.customer.toString() === req.user._id.toString();
+  const business = await Business.findById(order.business);
+  const isBusinessOwner = business && business.ownerUser.toString() === req.user._id.toString();
+
+  if (!isCustomer && !isBusinessOwner) {
+    return next(new AppError('You do not have permission to view this order', 403));
+  }
+
+  res.status(200).json({
     status: 'success',
     data: { order },
   });
@@ -377,6 +409,79 @@ exports.businessCancelOrder = catchAsync(async (req, res, next) => {
   res.status(200).json({
     status: 'success',
     message: decision.reason,
+    data: { order },
+  });
+});
+
+/**
+ * PATCH /api/v1/orders/:id/pickup
+ * Body: { pickupCode }
+ *
+ * Called by the BUSINESS at the moment the customer physically shows up
+ * to collect their bag. Only the business that owns the order may call
+ * this. Confirms the code the customer shows on their phone matches, and
+ * that the order was actually paid for, before marking it picked up and
+ * crediting the customer's impact stats.
+ */
+exports.confirmPickup = catchAsync(async (req, res, next) => {
+  const { pickupCode } = req.body;
+
+  if (!pickupCode) {
+    return next(new AppError('pickupCode is required', 400));
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+
+  const business = await Business.findById(order.business);
+  if (!business || business.ownerUser.toString() !== req.user._id.toString()) {
+    return next(new AppError('You do not have permission to confirm pickup for this order', 403));
+  }
+
+  if (order.status !== 'reserved') {
+    return next(
+      new AppError(`This order's status (${order.status}) cannot be picked up`, 400)
+    );
+  }
+
+  if (order.paymentStatus !== 'paid') {
+    return next(new AppError('This order has not been paid for yet', 400));
+  }
+
+  // Case-insensitive, trimmed comparison — forgiving of a customer
+  // reading the code slightly wrong or the business typing extra spaces,
+  // without weakening security (the code space is still large enough
+  // that guessing is impractical).
+  if (pickupCode.trim().toUpperCase() !== order.pickupCode) {
+    return next(new AppError('Incorrect pickup code', 400));
+  }
+
+  order.status = 'pickedUp';
+  order.pickedUpAt = new Date();
+  await order.save();
+
+  // Credit the customer's personal impact dashboard (Step 3 introduced
+  // these fields on User; this is the first place that actually
+  // increments them).
+  const bag = await SurpriseBag.findById(order.surpriseBag);
+  if (bag) {
+    const impact = calculateImpact(bag.originalPrice, bag.discountedPrice, order.quantity);
+    await User.findByIdAndUpdate(order.customer, {
+      $inc: {
+        'impactStats.totalMealsSaved': impact.mealsSaved,
+        'impactStats.totalMoneySaved': impact.moneySaved,
+        'impactStats.estimatedCO2Saved': impact.co2Saved,
+      },
+    });
+  }
+  // If the bag was somehow already deleted, we still confirm the pickup
+  // (the transaction itself is what matters) — we just can't credit
+  // impact stats without knowing the original/discounted prices.
+
+  res.status(200).json({
+    status: 'success',
     data: { order },
   });
 });

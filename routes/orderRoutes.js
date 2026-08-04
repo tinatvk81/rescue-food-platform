@@ -14,6 +14,9 @@ const router = express.Router();
 // Must be logged in to reserve a bag
 router.post('/', protect, orderController.createOrder);
 
+// View a single order (customer or the business it belongs to only)
+router.get('/:id', protect, orderController.getOrder);
+
 // Payment
 router.post('/:id/pay', protect, orderController.payOrder);
 // NOT behind `protect` — Zarinpal's redirect carries no cookie of ours;
@@ -24,5 +27,8 @@ router.get('/:id/verify-payment', orderController.verifyPaymentCallback);
 // Cancellation
 router.patch('/:id/cancel', protect, orderController.cancelOrder);
 router.patch('/:id/business-cancel', protect, orderController.businessCancelOrder);
+
+// In-person pickup confirmation (business-only)
+router.patch('/:id/pickup', protect, orderController.confirmPickup);
 
 module.exports = router;
