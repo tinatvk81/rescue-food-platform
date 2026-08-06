@@ -118,3 +118,13 @@ Cancellation policy (`utils/refundPolicy.js`):
 
 ## 📦 In-Person Pickup
 `PATCH /api/v1/orders/:id/pickup` (business-only, body: `{ pickupCode }`) confirms the handoff at the counter. It requires `paymentStatus === 'paid'` and a matching `pickupCode` (compared case-insensitively). On success, the order becomes `pickedUp`, `pickedUpAt` is recorded, and the customer's personal impact stats (`totalMealsSaved`, `totalMoneySaved`, `estimatedCO2Saved`) are incremented, using a shared, reusable calculation in `utils/impactStats.js` (2.5kg CO2 saved per meal, a commonly-cited estimate).
+
+## ⏰ Scheduled Jobs (Cron)
+Two background jobs (`jobs/cronJobs.js`) run automatically every 5 minutes, starting only after the MongoDB connection is confirmed:
+1. **Expire bags** — any `active` `SurpriseBag` whose `pickupWindowEnd` has passed becomes `expired`.
+2. **Mark no-shows** — any still-`reserved` `Order` whose bag's pickup window has passed becomes `noShow`. Per the cancellation policy, no-shows are **never** refunded — `paymentStatus` is left untouched even if it was `paid`.
+
+To test without waiting 5 real minutes, run the jobs immediately with:
+```bash
+node scripts/run-cron-now.js
+```

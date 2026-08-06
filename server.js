@@ -18,6 +18,7 @@ dotenv.config({ path: './.env' });
 
 const mongoose = require('mongoose');
 const app = require('./app');
+const cronJobs = require('./jobs/cronJobs');
 
 // Catches synchronous errors that weren't handled anywhere else
 // (e.g. referencing an undefined variable). Best practice: handle this
@@ -39,7 +40,13 @@ if (!MONGO_URI) {
 
 mongoose
   .connect(MONGO_URI)
-  .then(() => console.log('✅ Successfully connected to MongoDB'))
+  .then(() => {
+    console.log('✅ Successfully connected to MongoDB');
+    // Only start the recurring jobs once we KNOW the DB connection is
+    // up — starting them earlier would make every scheduled run fail
+    // with a Mongoose buffering timeout.
+    cronJobs.start();
+  })
   .catch((err) => {
     console.error('❌ Error connecting to MongoDB:', err.message);
     process.exit(1);
