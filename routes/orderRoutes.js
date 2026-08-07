@@ -31,4 +31,8 @@ router.patch('/:id/business-cancel', protect, orderController.businessCancelOrde
 // In-person pickup confirmation (business-only)
 router.patch('/:id/pickup', protect, orderController.confirmPickup);
 
+// Reviews and customer trust flags
+router.post('/:id/review', protect, orderController.createReview);
+router.post('/:id/flag-customer', protect, orderController.flagCustomer);
+
 module.exports = router;

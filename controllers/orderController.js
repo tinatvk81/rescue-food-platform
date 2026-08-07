@@ -31,12 +31,18 @@ const SurpriseBag = require('../models/surpriseBagModel');
 const Business = require('../models/businessModel');
 const Order = require('../models/orderModel');
 const User = require('../models/userModel');
+const Review = require('../models/reviewModel');
+const CustomerFlag = require('../models/customerFlagModel');
 const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
 const generatePickupCode = require('../utils/generatePickupCode');
 const paymentService = require('../utils/paymentService');
 const { evaluateCancellation } = require('../utils/refundPolicy');
 const { calculateImpact } = require('../utils/impactStats');
+
+// A customer is auto-restricted once flagged more than this many times
+// across ALL businesses (not per-business) — see flagCustomer below.
+const MAX_FLAGS_BEFORE_RESTRICTION = 3;
 
 /**
  * Releases previously-reserved inventory back to a bag (used by both
@@ -483,5 +489,140 @@ exports.confirmPickup = catchAsync(async (req, res, next) => {
   res.status(200).json({
     status: 'success',
     data: { order },
+  });
+});
+
+/**
+ * POST /api/v1/orders/:id/review
+ * Body: { rating, comment? }
+ *
+ * Only the customer who placed the order may review it, and only
+ * after it's actually been picked up (rating a bag you never received
+ * would be meaningless/unfair to the business).
+ */
+exports.createReview = catchAsync(async (req, res, next) => {
+  const { rating, comment } = req.body;
+
+  if (rating === undefined) {
+    return next(new AppError('rating is required', 400));
+  }
+  const ratingNum = Number(rating);
+  if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+    return next(new AppError('rating must be a whole number between 1 and 5', 400));
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+  if (order.customer.toString() !== req.user._id.toString()) {
+    return next(new AppError('You do not have permission to review this order', 403));
+  }
+  if (order.status !== 'pickedUp') {
+    return next(new AppError('You can only review an order after picking it up', 400));
+  }
+
+  const existingReview = await Review.findOne({ order: order._id });
+  if (existingReview) {
+    return next(new AppError('You have already reviewed this order', 409));
+  }
+
+  const review = await Review.create({
+    order: order._id,
+    customer: req.user._id,
+    business: order.business,
+    rating: ratingNum,
+    comment,
+  });
+
+  // Recompute the business's running average rating. Reading the
+  // current rating/reviewsCount and writing the new average back is
+  // not perfectly atomic under extreme concurrency (two reviews landing
+  // at the exact same instant), but a business receiving simultaneous
+  // reviews is vanishingly rare in practice, and being off by a
+  // fraction of a star for a moment is a low-stakes, self-correcting
+  // inconsistency — not worth the complexity of a transaction here.
+  const business = await Business.findById(order.business);
+  if (business) {
+    const newReviewsCount = business.reviewsCount + 1;
+    const newRating =
+      (business.rating * business.reviewsCount + ratingNum) / newReviewsCount;
+
+    business.rating = Math.round(newRating * 10) / 10; // round to 1 decimal place
+    business.reviewsCount = newReviewsCount;
+    await business.save();
+  }
+
+  res.status(201).json({
+    status: 'success',
+    data: { review },
+  });
+});
+
+/**
+ * POST /api/v1/orders/:id/flag-customer
+ * Body: { reason } — 'no-show' or 'bad-behavior'
+ *
+ * Business-only. To prevent abuse (a business flagging a customer out
+ * of spite with no real incident), each reason requires the order to
+ * actually be in a matching state:
+ *   - 'no-show'      requires order.status === 'noShow'
+ *   - 'bad-behavior' requires order.status to be 'pickedUp' or 'noShow'
+ *     (i.e. there was at least some real interaction/attempt)
+ *
+ * Once a customer accumulates more than MAX_FLAGS_BEFORE_RESTRICTION
+ * flags (across ALL businesses, not just this one), their account is
+ * automatically restricted (User.isRestricted = true), which the
+ * `protect` middleware (Step 1) and login controllers already check.
+ */
+exports.flagCustomer = catchAsync(async (req, res, next) => {
+  const { reason } = req.body;
+
+  if (!reason || !['no-show', 'bad-behavior'].includes(reason)) {
+    return next(new AppError('reason must be either no-show or bad-behavior', 400));
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) {
+    return next(new AppError('No order found with that id', 404));
+  }
+
+  const business = await Business.findById(order.business);
+  if (!business || business.ownerUser.toString() !== req.user._id.toString()) {
+    return next(new AppError('You do not have permission to flag this order', 403));
+  }
+
+  if (reason === 'no-show' && order.status !== 'noShow') {
+    return next(new AppError('This order is not marked as a no-show', 400));
+  }
+  if (reason === 'bad-behavior' && !['pickedUp', 'noShow'].includes(order.status)) {
+    return next(
+      new AppError('bad-behavior can only be reported for a completed or no-show order', 400)
+    );
+  }
+
+  const existingFlag = await CustomerFlag.findOne({ order: order._id });
+  if (existingFlag) {
+    return next(new AppError('This order has already been flagged', 409));
+  }
+
+  await CustomerFlag.create({
+    customer: order.customer,
+    business: business._id,
+    order: order._id,
+    reason,
+  });
+
+  const totalFlags = await CustomerFlag.countDocuments({ customer: order.customer });
+
+  if (totalFlags > MAX_FLAGS_BEFORE_RESTRICTION) {
+    await User.findByIdAndUpdate(order.customer, { isRestricted: true });
+  }
+
+  res.status(201).json({
+    status: 'success',
+    message: `Customer flagged (${totalFlags} total flag(s))${
+      totalFlags > MAX_FLAGS_BEFORE_RESTRICTION ? ' — account has been restricted' : ''
+    }`,
   });
 });
