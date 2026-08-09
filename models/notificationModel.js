@@ -1,14 +1,16 @@
 /**
  * notificationModel.js
  * --------------------
- * Stores in-app notifications for users — e.g. "your business was
- * approved" or "your business was rejected: <reason>".
+ * Stores in-app notifications for users.
  *
- * For now, notifications are ONLY stored in the database and fetched
- * by the frontend (no endpoints to read them yet — that arrives in
- * Step 12 alongside SMS/push delivery). Creating them now, in Step 4,
- * lets the admin-approval flow start recording history immediately
- * instead of that data being lost until Step 12 is built.
+ * UPDATED in Step 12: the `type` enum now includes the customer-facing
+ * types this step wires up (newBagNearby, orderConfirmed,
+ * pickupReminder), in addition to the business-approval types already
+ * used since Step 4.
+ *
+ * Still ONLY stored in the database — no real SMS/push delivery yet.
+ * See utils/smsService.js (Step 2) for the same "mock now, swap later"
+ * pattern this will eventually follow for real delivery.
  */
 
 const mongoose = require('mongoose');
@@ -27,7 +29,9 @@ const notificationSchema = new mongoose.Schema({
       'businessApproved',
       'businessRejected',
       'businessSuspended',
-      // more types will be added in later steps (orderConfirmed, pickupReminder, etc.)
+      'newBagNearby',
+      'orderConfirmed',
+      'pickupReminder',
     ],
     required: true,
   },

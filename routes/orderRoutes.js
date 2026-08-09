@@ -19,6 +19,11 @@ router.get('/:id', protect, orderController.getOrder);
 
 // Payment
 router.post('/:id/pay', protect, orderController.payOrder);
+
+router.get('/my-orders', protect, orderController.getMyOrders);
+router.get('/:id', protect, orderController.getOrder);
+
+
 // NOT behind `protect` — Zarinpal's redirect carries no cookie of ours;
 // see the comment in orderController.verifyPaymentCallback for how this
 // route authorizes itself instead (matching the stored Authority token).

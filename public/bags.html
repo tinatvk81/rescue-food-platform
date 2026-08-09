@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>بسته‌های نزدیک | نجات غذا</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <a href="/" class="logo"><span class="mark">🥖</span> نجات غذا</a>
+      <nav class="nav-links">
+        <a href="/orders.html">سفارش‌های من</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container" style="padding-top: 24px;">
+    <h1 class="section-title">بسته‌های غافلگیری نزدیک تو</h1>
+
+    <div class="field">
+      <select id="sort-select">
+        <option value="distance">نزدیک‌ترین</option>
+        <option value="price">ارزان‌ترین</option>
+        <option value="expiring-soon">زودتر تمام می‌شه</option>
+      </select>
+    </div>
+
+    <div id="results"></div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/bags.js"></script>
+</body>
+</html>

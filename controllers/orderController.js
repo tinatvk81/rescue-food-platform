@@ -25,7 +25,7 @@
  * `quantityReserved + quantity <= quantityAvailable`, which is the
  * condition that actually prevents overselling for any requested quantity.
  */
-
+const notify = require('../utils/notify');
 const mongoose = require('mongoose');
 const SurpriseBag = require('../models/surpriseBagModel');
 const Business = require('../models/businessModel');
@@ -188,6 +188,13 @@ exports.createOrder = catchAsync(async (req, res, next) => {
     return next(err);
   }
 
+  // Step 12: let the business know a new order came in
+  await notify(
+    business.ownerUser,
+    'orderConfirmed',
+    `A new order was placed for "${updatedBag.title}" (quantity: ${quantityNum}).`
+  );
+
   res.status(201).json({
     status: 'success',
     data: { order },
@@ -221,6 +228,23 @@ exports.getOrder = catchAsync(async (req, res, next) => {
   res.status(200).json({
     status: 'success',
     data: { order },
+  });
+});
+
+
+/**
+ * GET /api/v1/orders/my-orders
+ * Returns the current customer's own orders, newest first.
+ */
+exports.getMyOrders = catchAsync(async (req, res, next) => {
+  const orders = await Order.find({ customer: req.user._id })
+    .sort({ createdAt: -1 })
+    .populate('surpriseBag', 'title pickupWindowStart pickupWindowEnd');
+
+  res.status(200).json({
+    status: 'success',
+    results: orders.length,
+    data: { orders },
   });
 });
 

@@ -25,7 +25,17 @@ const app = express();
 // ---------- 1) GLOBAL MIDDLEWARES ----------
 
 // Sets secure HTTP headers (protects against several common web vulnerabilities)
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        'style-src': ["'self'", 'https://fonts.googleapis.com'],
+        'font-src': ["'self'", 'https://fonts.gstatic.com'],
+      },
+    },
+  })
+);
 
 // Allows cross-origin requests from the frontend.
 // TODO: restrict `origin` to the real frontend domain before going to production.
@@ -78,6 +88,8 @@ app.use('/api/v1/businesses', require('./routes/businessRoutes'));
 app.use('/api/v1/admin', require('./routes/adminRoutes'));
 app.use('/api/v1/bags', require('./routes/bagRoutes'));
 app.use('/api/v1/orders', require('./routes/orderRoutes'));
+
+app.use('/api/v1/notifications', require('./routes/notificationRoutes'));
 
 // TODO: mount future route modules here
 
@@ -135,5 +147,7 @@ app.use((err, req, res, next) => {
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
+
+
 
 module.exports = app;

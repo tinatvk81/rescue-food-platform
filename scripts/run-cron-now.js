@@ -1,16 +1,12 @@
 /**
  * scripts/run-cron-now.js
  * -----------------------
- * Runs the Step 10 cron jobs (expireBags + markNoShows) ONE TIME,
- * immediately — so you can test them without waiting for the real
- * 5-minute schedule.
+ * Runs all Step 10/12 cron jobs (expireBags + markNoShows +
+ * sendPickupReminders) ONE TIME, immediately — so you can test them
+ * without waiting for the real 5-minute schedule.
  *
  * Usage:
  *   node scripts/run-cron-now.js
- *
- * Connects to the same MongoDB as the main app (reads MONGO_URI from
- * .env), runs the jobs once, prints how many documents each job
- * updated, then disconnects and exits.
  */
 
 const path = require('path');
@@ -19,7 +15,7 @@ const dotenv = require('dotenv');
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const mongoose = require('mongoose');
-const { expireBags, markNoShows } = require('../jobs/cronJobs');
+const { expireBags, markNoShows, sendPickupReminders } = require('../jobs/cronJobs');
 
 (async () => {
   if (!process.env.MONGO_URI) {
@@ -35,6 +31,9 @@ const { expireBags, markNoShows } = require('../jobs/cronJobs');
 
   const noShowCount = await markNoShows();
   console.log(`Orders marked no-show: ${noShowCount}`);
+
+  const reminderCount = await sendPickupReminders();
+  console.log(`Pickup reminders sent: ${reminderCount}`);
 
   await mongoose.disconnect();
   console.log('\nDone.');

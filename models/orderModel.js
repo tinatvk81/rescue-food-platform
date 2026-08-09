@@ -87,6 +87,11 @@ const orderSchema = new mongoose.Schema({
   pickedUpAt: {
     type: Date,
   },
+  // Step 12: prevents sending the same pickup reminder more than once
+  pickupReminderSent: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 module.exports = mongoose.model('Order', orderSchema);
