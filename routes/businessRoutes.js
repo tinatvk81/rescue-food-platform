@@ -18,6 +18,9 @@ const router = express.Router();
 // anonymous visitor is never blocked from viewing.
 router.get('/:id', optionalAuth, businessController.getBusiness);
 
+// Step 13: business dashboard stats (owner or admin only)
+router.get('/:id/dashboard-stats', protect, businessController.getDashboardStats);
+
 // Everything below requires being logged in
 router.post('/', protect, businessController.createBusiness);
 router.patch('/:id', protect, businessController.updateBusiness);

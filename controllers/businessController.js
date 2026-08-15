@@ -1,44 +1,36 @@
 /**
  * businessController.js
  * ----------------------
- * Handles business registration, viewing, editing, and document uploads.
+ * Handles business registration, viewing, editing, document uploads,
+ * and (Step 13) dashboard stats.
  *
  * Design decision (discussed with the user before implementing):
  * Rather than requiring a user to already have role='business' before
- * they can register a business (which would need a separate, awkward
- * "become a business" step), ANY logged-in user can create a business.
- * On successful creation, we automatically promote their User.role to
- * 'business'. Each user may own at most one business (checked here at
- * the application level, not via a DB unique index, so it's easy to
- * loosen this rule later if multi-branch businesses are ever supported).
+ * they can register a business, ANY logged-in user can create a
+ * business. On successful creation, we automatically promote their
+ * User.role to 'business'. Each user may own at most one business
+ * (checked here at the application level, not via a DB unique index).
  */
 
 const User = require('../models/userModel');
 const Business = require('../models/businessModel');
+const Order = require('../models/orderModel');
 const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
 
 // Fields a business owner is allowed to change via PATCH.
-// Deliberately excludes: ownerUser, status, rating, reviewsCount —
-// those must only ever change through dedicated flows (admin approval
-// in Step 4, reviews in Step 11) and never by the owner directly.
 const EDITABLE_FIELDS = ['name', 'category', 'address', 'location', 'operatingHours', 'economicCode'];
 
 /**
  * Strips sensitive fields (nationalId, economicCode, documents) from a
  * business before sending it to anyone who isn't the owner or an admin.
- * Used by getBusiness so the public can browse businesses (Step 6 will
- * build on this) without seeing another person's private verification info.
- *
- * @param {import('mongoose').Document} business
- * @param {import('mongoose').Document|undefined} requestingUser - req.user, may be undefined for anonymous requests
  */
 const sanitizeForPublicView = (business, requestingUser) => {
   const isOwner = requestingUser && business.ownerUser.toString() === requestingUser._id.toString();
   const isAdmin = requestingUser && requestingUser.role === 'admin';
 
   if (isOwner || isAdmin) {
-    return business; // full detail for the owner or an admin
+    return business;
   }
 
   const publicBusiness = business.toObject();
@@ -50,9 +42,6 @@ const sanitizeForPublicView = (business, requestingUser) => {
 
 /**
  * POST /api/v1/businesses
- * Registers a new business owned by the currently logged-in user.
- * Requires: protect (must be logged in). Any role may call this —
- * see the design note above.
  */
 exports.createBusiness = catchAsync(async (req, res, next) => {
   const { name, category, address, longitude, latitude, nationalId, economicCode, operatingHours } =
@@ -67,7 +56,6 @@ exports.createBusiness = catchAsync(async (req, res, next) => {
     return next(new AppError('longitude and latitude are required', 400));
   }
 
-  // Enforce "one business per user" at the application level
   const existingBusiness = await Business.findOne({ ownerUser: req.user._id });
   if (existingBusiness) {
     return next(new AppError('You already have a registered business', 409));
@@ -87,8 +75,6 @@ exports.createBusiness = catchAsync(async (req, res, next) => {
     operatingHours,
   });
 
-  // Promote the owner's account so future role-gated routes (e.g.
-  // restrictTo('business')) recognize them correctly.
   req.user.role = 'business';
   await User.findByIdAndUpdate(req.user._id, { role: 'business' });
 
@@ -100,11 +86,6 @@ exports.createBusiness = catchAsync(async (req, res, next) => {
 
 /**
  * GET /api/v1/businesses/:id
- * Publicly viewable — no login required. Sensitive fields are hidden
- * unless the requester is the owner or an admin (see sanitizeForPublicView).
- *
- * Note: this route is NOT behind `protect`, so req.user may be
- * undefined here — that's expected and handled below.
  */
 exports.getBusiness = catchAsync(async (req, res, next) => {
   const business = await Business.findById(req.params.id);
@@ -121,8 +102,6 @@ exports.getBusiness = catchAsync(async (req, res, next) => {
 
 /**
  * PATCH /api/v1/businesses/:id
- * Only the business's own owner may edit it. Only a safe allow-list of
- * fields (EDITABLE_FIELDS) can be changed this way.
  */
 exports.updateBusiness = catchAsync(async (req, res, next) => {
   const business = await Business.findById(req.params.id);
@@ -135,16 +114,12 @@ exports.updateBusiness = catchAsync(async (req, res, next) => {
     return next(new AppError('You do not have permission to edit this business', 403));
   }
 
-  // Only copy over whitelisted fields — silently ignores anything else
-  // in the body (e.g. someone trying to sneak in status: 'approved')
   EDITABLE_FIELDS.forEach((field) => {
     if (req.body[field] !== undefined) {
       business[field] = req.body[field];
     }
   });
 
-  // Special case: longitude/latitude arrive as separate flat fields
-  // (matching createBusiness's input shape), not as a nested GeoJSON object
   if (req.body.longitude !== undefined && req.body.latitude !== undefined) {
     business.location = {
       type: 'Point',
@@ -162,9 +137,6 @@ exports.updateBusiness = catchAsync(async (req, res, next) => {
 
 /**
  * POST /api/v1/businesses/:id/documents
- * Uploads one or more verification document images/PDFs (via multer,
- * see middlewares/uploadMiddleware.js) and appends their URLs to the
- * business's `documents` array. Owner-only.
  */
 exports.uploadDocuments = catchAsync(async (req, res, next) => {
   const business = await Business.findById(req.params.id);
@@ -181,8 +153,6 @@ exports.uploadDocuments = catchAsync(async (req, res, next) => {
     return next(new AppError('Please upload at least one document', 400));
   }
 
-  // req.files is populated by multer (see routes/businessRoutes.js,
-  // which uses upload.array('documents', 5))
   const newDocumentUrls = req.files.map((file) => `/uploads/business-documents/${file.filename}`);
 
   business.documents.push(...newDocumentUrls);
@@ -191,5 +161,83 @@ exports.uploadDocuments = catchAsync(async (req, res, next) => {
   res.status(200).json({
     status: 'success',
     data: { business },
+  });
+});
+
+/**
+ * GET /api/v1/businesses/:id/dashboard-stats?period=week|month
+ * [Step 13] Owner or admin only.
+ *
+ * `totalBagsSold`/`totalRevenue` are PERIOD-scoped (only orders picked
+ * up within the selected window). `totalMealsSaved` is a LIFETIME
+ * total for the business, not reset by the period filter.
+ */
+exports.getDashboardStats = catchAsync(async (req, res, next) => {
+  const business = await Business.findById(req.params.id);
+  if (!business) {
+    return next(new AppError('No business found with that id', 404));
+  }
+
+  const isOwner = business.ownerUser.toString() === req.user._id.toString();
+  const isAdmin = req.user.role === 'admin';
+  if (!isOwner && !isAdmin) {
+    return next(new AppError('You do not have permission to view this dashboard', 403));
+  }
+
+  const period = req.query.period === 'month' ? 'month' : 'week';
+  const days = period === 'month' ? 30 : 7;
+  const periodStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const periodTotals = await Order.aggregate([
+    {
+      $match: {
+        business: business._id,
+        status: 'pickedUp',
+        pickedUpAt: { $gte: periodStart },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        totalBagsSold: { $sum: '$quantity' },
+        totalRevenue: { $sum: '$totalPrice' },
+      },
+    },
+  ]);
+
+  const dailyChart = await Order.aggregate([
+    {
+      $match: {
+        business: business._id,
+        status: 'pickedUp',
+        pickedUpAt: { $gte: periodStart },
+      },
+    },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$pickedUpAt' } },
+        count: { $sum: '$quantity' },
+        revenue: { $sum: '$totalPrice' },
+      },
+    },
+    { $sort: { _id: 1 } },
+    { $project: { _id: 0, date: '$_id', count: 1, revenue: 1 } },
+  ]);
+
+  const lifetimeTotals = await Order.aggregate([
+    { $match: { business: business._id, status: 'pickedUp' } },
+    { $group: { _id: null, totalMealsSaved: { $sum: '$quantity' } } },
+  ]);
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      period,
+      totalBagsSold: periodTotals[0]?.totalBagsSold || 0,
+      totalRevenue: periodTotals[0]?.totalRevenue || 0,
+      totalMealsSaved: lifetimeTotals[0]?.totalMealsSaved || 0,
+      averageRating: business.rating,
+      dailyChart,
+    },
   });
 });
