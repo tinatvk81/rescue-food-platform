@@ -39,7 +39,10 @@ app.use(
 
 // Allows cross-origin requests from the frontend.
 // TODO: restrict `origin` to the real frontend domain before going to production.
-app.use(cors());
+app.use(cors({
+  origin: process.env.APP_BASE_URL || 'http://localhost:3000',
+  credentials: true,
+}));
 
 // Logs every incoming request to the console — only in development,
 // so production logs stay clean (e.g. "GET /api/v1/health 200 8ms")
