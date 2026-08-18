@@ -5,10 +5,9 @@
  * and the centralized error handler.
  *
  * IMPORTANT: this file ONLY configures Express — it does NOT connect to
- * the database or start listening on a port. That separation (done in
- * server.js) means this file can be imported directly by test tools
- * (e.g. Jest + Supertest) without needing a real running server or DB
- * connection, which is exactly what we'll rely on in Step 17 (Testing).
+ * the database or start listening on a port (see server.js). That
+ * separation lets test tools (Step 17) import this file directly
+ * without a real running server or DB connection.
  */
 
 const path = require('path');
@@ -19,12 +18,15 @@ const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
+const logger = require('./utils/logger');
 
 const app = express();
 
 // ---------- 1) GLOBAL MIDDLEWARES ----------
 
-// Sets secure HTTP headers (protects against several common web vulnerabilities)
+// Secure HTTP headers. CSP directives extended beyond Helmet's default
+// to allow Google Fonts (Vazirmatn, used by the frontend) — everything
+// else stays at Helmet's secure defaults (script-src 'self', etc.).
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -37,22 +39,27 @@ app.use(
   })
 );
 
-// Allows cross-origin requests from the frontend.
-// TODO: restrict `origin` to the real frontend domain before going to production.
-app.use(cors({
-  origin: process.env.APP_BASE_URL || 'http://localhost:3000',
-  credentials: true,
-}));
+// Step 15: restricted to the app's own origin instead of allowing "*" —
+// safe because the frontend is served by this same Express app.
+// `credentials: true` is required for the httpOnly JWT cookie to be
+// sent/received correctly.
+app.use(
+  cors({
+    origin: process.env.APP_BASE_URL || 'http://localhost:3000',
+    credentials: true,
+  })
+);
 
-// Logs every incoming request to the console — only in development,
-// so production logs stay clean (e.g. "GET /api/v1/health 200 8ms")
+// Human-readable request logging — development only. Production uses
+// the structured winston logger instead (see the error handler below).
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Rate limiting across the whole API — basic protection against abuse/brute force
+// General API rate limiting (a stricter, auth-specific limiter is
+// applied separately inside routes/authRoutes.js, Step 15)
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   limit: 300,
   standardHeaders: true,
   legacyHeaders: false,
@@ -60,24 +67,21 @@ const generalLimiter = rateLimit({
 });
 app.use('/api', generalLimiter);
 
-// Parses incoming JSON/urlencoded bodies into req.body (size-limited for safety)
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
 
-// Strips any MongoDB operator characters (like `$`) from user input,
-// preventing NoSQL injection attacks
+// Prevents NoSQL injection via MongoDB operator characters (e.g. `$`)
 app.use(mongoSanitize());
 
-// Serves static frontend files (HTML/CSS/JS) placed in /public.
-// e.g. public/index.html would become reachable at http://.../
+// Serves the static frontend (public/index.html, /css, /js, /uploads)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- 2) ROUTES ----------
 
-// Health-check route — confirms the server process is alive and responding.
-// NOTE: this does NOT check the database connection, only that Express itself
-// is running.
+// Health-check — confirms the Express process itself is alive.
+// Does NOT check the database connection (see server.js console logs
+// for that instead).
 app.get('/api/v1/health', (req, res) => {
   res.status(200).json({
     status: 'success',
@@ -91,10 +95,7 @@ app.use('/api/v1/businesses', require('./routes/businessRoutes'));
 app.use('/api/v1/admin', require('./routes/adminRoutes'));
 app.use('/api/v1/bags', require('./routes/bagRoutes'));
 app.use('/api/v1/orders', require('./routes/orderRoutes'));
-
 app.use('/api/v1/notifications', require('./routes/notificationRoutes'));
-
-// TODO: mount future route modules here
 
 // Catch-all for any route that doesn't match one defined above
 app.all('*', (req, res) => {
@@ -105,35 +106,24 @@ app.all('*', (req, res) => {
 });
 
 // ---------- 3) GLOBAL ERROR HANDLER ----------
-// Express recognizes this as an error handler because it takes 4 arguments
-// (err, req, res, next). Any error passed to next(err) anywhere in the app
-// (including via catchAsync) ends up here.
 app.use((err, req, res, next) => {
   let statusCode = err.statusCode || 500;
   let message = err.message || 'Internal server error';
 
-  // MongoDB duplicate key error (e.g. a unique index was violated directly,
-  // bypassing our manual pre-check)
   if (err.code === 11000) {
     statusCode = 409;
     message = 'This value already exists in the system (duplicate)';
   }
-
-  // Mongoose validation error (e.g. a required field is missing or malformed)
   if (err.name === 'ValidationError') {
     statusCode = 400;
     message = Object.values(err.errors)
       .map((e) => e.message)
       .join(' | ');
   }
-
-  // Mongoose CastError (e.g. an invalid ObjectId was passed in a URL param)
   if (err.name === 'CastError') {
     statusCode = 400;
     message = `Invalid value for ${err.path}: ${err.value}`;
   }
-
-  // JWT errors
   if (err.name === 'JsonWebTokenError') {
     statusCode = 401;
     message = 'Invalid token, please log in again';
@@ -143,14 +133,20 @@ app.use((err, req, res, next) => {
     message = 'Your session has expired, please log in again';
   }
 
+  // Log every 500-level (unexpected) error with its full stack via
+  // winston — in production this becomes a structured JSON log line
+  // that a real monitoring setup (or `grep '"level":"error"'`) can find.
+  // 4xx (client-fault) errors are NOT logged as errors — they're
+  // normal, expected traffic (bad input, wrong password, etc.).
+  if (statusCode >= 500) {
+    logger.error(message, { stack: err.stack, path: req.originalUrl, method: req.method });
+  }
+
   res.status(statusCode).json({
     status: statusCode.toString().startsWith('4') ? 'fail' : 'error',
     message,
-    // Stack traces are only exposed in development, never in production
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
-
-
 
 module.exports = app;
